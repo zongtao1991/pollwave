@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>参与投票 - PollWave</title>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <header class="header container">
+    <a href="/" class="logo">Poll<span>Wave</span></a>
+  </header>
+
+  <main class="container" style="max-width: 700px;">
+    <div id="loading" class="card" style="text-align: center; padding: 60px;">
+      <div style="font-size: 48px; margin-bottom: 16px;">⏳</div>
+      <p>加载中...</p>
+    </div>
+
+    <div id="error" class="card" style="display: none; text-align: center; padding: 60px;">
+      <div style="font-size: 48px; margin-bottom: 16px;">😕</div>
+      <h2 style="margin-bottom: 8px;">投票不存在</h2>
+      <p style="color: var(--text-secondary); margin-bottom: 24px;" id="error-message">该分享链接无效或已过期</p>
+      <a href="/" class="btn btn-primary">返回首页</a>
+    </div>
+
+    <div id="poll-content" style="display: none;">
+      <div class="card" style="margin-bottom: 24px;">
+        <h1 id="poll-title" style="margin-bottom: 8px;"></h1>
+        <p id="poll-description" style="color: var(--text-secondary);"></p>
+        <div id="anonymous-badge" style="margin-top: 16px;">
+          <span class="status-badge status-draft">🔒 匿名投票</span>
+        </div>
+      </div>
+
+      <div class="progress-bar">
+        <div class="progress-fill" id="progress-fill" style="width: 0%;"></div>
+      </div>
+
+      <form id="respond-form">
+        <div id="questions-container">
+        </div>
+
+        <div id="non-anonymous-name" class="card" style="display: none; margin-bottom: 24px;">
+          <div class="form-group" style="margin-bottom: 0;">
+            <label class="form-label">您的昵称（可选）</label>
+            <input type="text" class="form-input" id="respondent-name" placeholder="输入您的昵称">
+          </div>
+        </div>
+
+        <button type="submit" class="btn btn-primary" style="width: 100%; font-size: 16px; padding: 16px;">
+          提交回答
+        </button>
+      </form>
+    </div>
+
+    <div id="success-card" class="card" style="display: none; text-align: center; padding: 60px;">
+      <div style="font-size: 64px; margin-bottom: 24px;">🎉</div>
+      <h1 style="margin-bottom: 16px;">感谢参与！</h1>
+      <p style="color: var(--text-secondary); margin-bottom: 32px;">您的回答已成功提交</p>
+      <a href="/" class="btn btn-primary">返回首页</a>
+    </div>
+  </main>
+
+  <script src="/js/app.js"></script>
+  <script>
+    let pollData = null;
+    let shareCode = null;
+
+    function getShareCode() {
+      const path = window.location.pathname;
+      const match = path.match(/\/share\/([a-zA-Z0-9]+)/);
+      return match ? match[1] : null;
+    }
+
+    async function loadPoll() {
+      shareCode = getShareCode();
+      if (!shareCode) {
+        showError('无效的分享链接');
+        return;
+      }
+
+      try {
+        pollData = await api.get(`/share/${shareCode}`);
+        document.getElementById('loading').style.display = 'none';
+        document.getElementById('poll-content').style.display = 'block';
+        renderPoll();
+      } catch (error) {
+        showError(error.message || '加载投票失败');
+      }
+    }
+
+    function showError(message) {
+      document.getElementById('loading').style.display = 'none';
+      document.getElementById('error').style.display = 'block';
+      document.getElementById('error-message').textContent = message;
+    }
+
+    function renderPoll() {
+      document.getElementById('poll-title').textContent = pollData.title;
+      document.getElementById('poll-description').textContent = pollData.description || '';
+
+      const anonymousBadge = document.getElementById('anonymous-badge');
+      if (pollData.isAnonymous) {
+        anonymousBadge.style.display = 'block';
+        document.getElementById('non-anonymous-name').style.display = 'none';
+      } else {
+        anonymousBadge.style.display = 'none';
+        document.getElementById('non-anonymous-name').style.display = 'block';
+      }
+
+      const container = document.getElementById('questions-container');
+      container.innerHTML = pollData.questions.map((q, index) => renderQuestion(q, index)).join('');
+
+      updateProgress();
+    }
+
+    function renderQuestion(question, index) {
+      const questionNum = index + 1;
+      let optionsHtml = '';
+
+      switch (question.type) {
+        case 'single_choice':
+          optionsHtml = question.options.map((opt, i) => `
+            <label class="option-item" for="q${question.id}-opt${i}">
+              <input type="radio" name="q${question.id}" id="q${question.id}-opt${i}" value="${escapeHtml(opt)}" class="option-radio" onchange="updateProgress()">
+              <span>${escapeHtml(opt)}</span>
+            </label>
+          `).join('');
+          break;
+
+        case 'multiple_choice':
+          optionsHtml = question.options.map((opt, i) => `
+            <label class="option-item">
+              <input type="checkbox" name="q${question.id}" value="${escapeHtml(opt)}" class="option-checkbox" onchange="updateProgress()">
+              <span>${escapeHtml(opt)}</span>
+            </label>
+          `).join('');
+          break;
+
+        case 'text_input':
+          optionsHtml = `
+            <textarea class="form-textarea" name="q${question.id}" placeholder="请输入您的回答..." oninput="updateProgress()"></textarea>
+          `;
+          break;
+
+        case 'rating':
+          optionsHtml = `
+            <div class="rating-stars" id="rating-${question.id}">
+              ${[1, 2, 3, 4, 5].map(star => `
+                <span class="rating-star" data-rating="${star}" onclick="setRating(${question.id}, ${star})">★</span>
+              `).join('')}
+            </div>
+            <input type="hidden" name="q${question.id}" id="rating-input-${question.id}" value="">
+          `;
+          break;
+      }
+
+      return `
+        <div class="card" style="margin-bottom: 20px;" data-question-id="${question.id}">
+          <div style="display: flex; gap: 12px; margin-bottom: 16px;">
+            <span class="question-number">${questionNum}</span>
+            <div>
+              <h3 style="font-size: 16px; margin-bottom: 4px;">${escapeHtml(question.text)}</h3>
+              ${question.isRequired ? '<span style="color: var(--error); font-size: 12px;">* 必填</span>' : ''}
+            </div>
+          </div>
+          ${optionsHtml}
+        </div>
+      `;
+    }
+
+    function setRating(questionId, rating) {
+      const stars = document.querySelectorAll(`#rating-${questionId} .rating-star`);
+      stars.forEach((star, index) => {
+        if (index < rating) {
+          star.classList.add('active');
+        } else {
+          star.classList.remove('active');
+        }
+      });
+      document.getElementById(`rating-input-${questionId}`).value = rating;
+      updateProgress();
+    }
+
+    function updateProgress() {
+      const questions = pollData.questions;
+      let answered = 0;
+
+      questions.forEach(q => {
+        const isAnswered = isQuestionAnswered(q);
+        if (isAnswered || !q.isRequired) {
+          answered++;
+        }
+      });
+
+      const percentage = Math.round((answered / questions.length) * 100);
+      document.getElementById('progress-fill').style.width = `${percentage}%`;
+    }
+
+    function isQuestionAnswered(question) {
+      const name = `q${question.id}`;
+
+      switch (question.type) {
+        case 'single_choice':
+          const selectedRadio = document.querySelector(`input[name="${name}"]:checked`);
+          return !!selectedRadio;
+
+        case 'multiple_choice':
+          const checkedBoxes = document.querySelectorAll(`input[name="${name}"]:checked`);
+          return checkedBoxes.length > 0;
+
+        case 'text_input':
+          const textarea = document.querySelector(`textarea[name="${name}"]`);
+          return textarea && textarea.value.trim().length > 0;
+
+        case 'rating':
+          const ratingInput = document.getElementById(`rating-input-${question.id}`);
+          return ratingInput && ratingInput.value.length > 0;
+
+        default:
+          return false;
+      }
+    }
+
+    function collectAnswers() {
+      const answers = [];
+
+      pollData.questions.forEach(q => {
+        const name = `q${q.id}`;
+        let value = null;
+
+        switch (q.type) {
+          case 'single_choice':
+            const selectedRadio = document.querySelector(`input[name="${name}"]:checked`);
+            value = selectedRadio ? selectedRadio.value : null;
+            break;
+
+          case 'multiple_choice':
+            const checkedBoxes = document.querySelectorAll(`input[name="${name}"]:checked`);
+            value = Array.from(checkedBoxes).map(cb => cb.value);
+            break;
+
+          case 'text_input':
+            const textarea = document.querySelector(`textarea[name="${name}"]`);
+            value = textarea ? textarea.value.trim() : '';
+            break;
+
+          case 'rating':
+            const ratingInput = document.getElementById(`rating-input-${question.id}`);
+            value = ratingInput ? ratingInput.value : null;
+            break;
+        }
+
+        if (value !== null && (typeof value !== 'string' || value.length > 0) && (Array.isArray(value) ? value.length > 0 : true)) {
+          answers.push({
+            questionId: q.id,
+            value: value
+          });
+        }
+      });
+
+      return answers;
+    }
+
+    async function submitResponse(e) {
+      e.preventDefault();
+
+      for (const q of pollData.questions) {
+        if (q.isRequired && !isQuestionAnswered(q)) {
+          ui.showError(`请回答题目：${q.text}`);
+          return;
+        }
+      }
+
+      const answers = collectAnswers();
+      const respondentName = document.getElementById('respondent-name')?.value?.trim() || null;
+
+      try {
+        await api.post(`/share/${shareCode}/respond`, {
+          answers,
+          respondentName: pollData.isAnonymous ? null : respondentName
+        });
+
+        document.getElementById('poll-content').style.display = 'none';
+        document.getElementById('success-card').style.display = 'block';
+      } catch (error) {
+        ui.showError(error.message);
+      }
+    }
+
+    function escapeHtml(text) {
+      if (!text) return '';
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    document.getElementById('respond-form').addEventListener('submit', submitResponse);
+
+    document.addEventListener('DOMContentLoaded', () => {
+      loadPoll();
+    });
+  </script>
+</body>
+</html>

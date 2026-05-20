@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>创建投票 - PollWave</title>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <header class="header container">
+    <a href="/" class="logo">Poll<span>Wave</span></a>
+    <nav class="nav">
+      <a href="/dashboard.html">我的投票</a>
+      <a href="/create-poll.html" class="link">创建投票</a>
+      <span id="user-name"></span>
+      <a href="#" onclick="auth.logout()">退出</a>
+    </nav>
+  </header>
+
+  <main class="container" style="max-width: 800px;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px;">
+      <h1 id="page-title">创建新投票</h1>
+      <a href="/dashboard.html" class="btn btn-secondary btn-sm">返回列表</a>
+    </div>
+
+    <form id="poll-form">
+      <div class="card" style="margin-bottom: 24px;">
+        <h3 class="card-title" style="margin-bottom: 20px;">基本信息</h3>
+        <div class="form-group">
+          <label class="form-label">投票标题 <span class="required">*</span></label>
+          <input type="text" class="form-input" id="poll-title" placeholder="输入投票标题" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label">描述</label>
+          <textarea class="form-textarea" id="poll-description" placeholder="输入投票描述（可选）"></textarea>
+        </div>
+        <div style="display: flex; gap: 24px;">
+          <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+            <input type="checkbox" id="poll-anonymous" style="accent-color: var(--accent); width: 18px; height: 18px;">
+            <span>匿名投票</span>
+          </label>
+        </div>
+        <p class="form-hint">匿名投票不会记录回答者身份，仅记录 IP 用于防重复提交</p>
+      </div>
+
+      <div class="card">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+          <h3 class="card-title">题目</h3>
+          <button type="button" class="btn btn-secondary btn-sm" onclick="addQuestion()">+ 添加题目</button>
+        </div>
+        <div id="questions-container">
+        </div>
+        <div id="no-questions-hint" class="empty-state" style="padding: 40px;">
+          <div class="empty-state-icon" style="font-size: 36px;">❓</div>
+          <p style="color: var(--text-secondary);">点击上方按钮添加题目</p>
+        </div>
+      </div>
+
+      <div style="display: flex; gap: 16px; margin-top: 24px;">
+        <button type="submit" class="btn btn-primary" style="flex: 1;">保存为草稿</button>
+        <button type="button" class="btn btn-secondary" style="flex: 1;" onclick="saveAndPublish()">保存并发布</button>
+      </div>
+    </form>
+  </main>
+
+  <script src="/js/app.js"></script>
+  <script>
+    let questionCounter = 0;
+    let editingPollId = null;
+
+    const questionTypes = [
+      { value: 'single_choice', label: '单选题' },
+      { value: 'multiple_choice', label: '多选题' },
+      { value: 'text_input', label: '文本输入' },
+      { value: 'rating', label: '星级评分' },
+    ];
+
+    function addQuestion(questionData = null) {
+      const container = document.getElementById('questions-container');
+      const noQuestionsHint = document.getElementById('no-questions-hint');
+      const questionIndex = questionCounter++;
+
+      noQuestionsHint.style.display = 'none';
+
+      const questionDiv = document.createElement('div');
+      questionDiv.className = 'question-card';
+      questionDiv.id = `question-${questionIndex}`;
+      questionDiv.dataset.index = questionIndex;
+
+      const type = questionData?.type || 'single_choice';
+      const text = questionData?.text || '';
+      const isRequired = questionData?.isRequired !== false;
+      const options = questionData?.options || ['选项 1', '选项 2'];
+
+      questionDiv.innerHTML = `
+        <div class="question-header">
+          <div style="display: flex; align-items: center; gap: 12px;">
+            <span class="question-number">${container.children.length + 1}</span>
+            <select class="form-select question-type" style="width: 150px;" onchange="toggleQuestionOptions(${questionIndex})">
+              ${questionTypes.map(t => `<option value="${t.value}" ${t.value === type ? 'selected' : ''}>${t.label}</option>`).join('')}
+            </select>
+          </div>
+          <div class="question-actions">
+            <button type="button" onclick="moveQuestion(${questionIndex}, -1)" title="上移">⬆️</button>
+            <button type="button" onclick="moveQuestion(${questionIndex}, 1)" title="下移">⬇️</button>
+            <button type="button" onclick="removeQuestion(${questionIndex})" title="删除">🗑️</button>
+          </div>
+        </div>
+        <div class="form-group">
+          <input type="text" class="form-input question-text" placeholder="输入题目内容" value="${escapeHtml(text)}">
+        </div>
+        <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 16px; cursor: pointer;">
+          <input type="checkbox" class="question-required" ${isRequired ? 'checked' : ''} style="accent-color: var(--accent);">
+          <span style="font-size: 14px; color: var(--text-secondary);">必填</span>
+        </label>
+        <div class="question-options" id="options-${questionIndex}">
+          ${renderOptionsHTML(questionIndex, type, options)}
+        </div>
+      `;
+
+      container.appendChild(questionDiv);
+      updateQuestionNumbers();
+    }
+
+    function renderOptionsHTML(index, type, options) {
+      if (type === 'text_input' || type === 'rating') {
+        return '';
+      }
+
+      return `
+        <p class="form-hint" style="margin-bottom: 12px;">选项</p>
+        <div id="options-list-${index}">
+          ${options.map((opt, i) => `
+            <div style="display: flex; gap: 8px; margin-bottom: 8px;">
+              <input type="text" class="form-input option-input" value="${escapeHtml(opt)}" placeholder="选项 ${i + 1}">
+              <button type="button" class="btn btn-secondary btn-sm" onclick="removeOption(${index}, ${i})" style="padding: 8px 12px;">×</button>
+            </div>
+          `).join('')}
+        </div>
+        <button type="button" class="btn btn-secondary btn-sm" onclick="addOption(${index})">+ 添加选项</button>
+      `;
+    }
+
+    function toggleQuestionOptions(index) {
+      const questionDiv = document.getElementById(`question-${index}`);
+      const typeSelect = questionDiv.querySelector('.question-type');
+      const optionsDiv = document.getElementById(`options-${index}`);
+      const type = typeSelect.value;
+
+      if (type === 'text_input' || type === 'rating') {
+        optionsDiv.innerHTML = '';
+      } else {
+        optionsDiv.innerHTML = renderOptionsHTML(index, type, ['选项 1', '选项 2']);
+      }
+    }
+
+    function addOption(questionIndex) {
+      const optionsList = document.getElementById(`options-list-${questionIndex}`);
+      const optionCount = optionsList.children.length;
+
+      const optionDiv = document.createElement('div');
+      optionDiv.style.cssText = 'display: flex; gap: 8px; margin-bottom: 8px;';
+      optionDiv.innerHTML = `
+        <input type="text" class="form-input option-input" placeholder="选项 ${optionCount + 1}">
+        <button type="button" class="btn btn-secondary btn-sm" onclick="this.parentElement.remove()" style="padding: 8px 12px;">×</button>
+      `;
+
+      optionsList.appendChild(optionDiv);
+    }
+
+    function removeOption(questionIndex, optionIndex) {
+      const optionsList = document.getElementById(`options-list-${questionIndex}`);
+      if (optionsList.children.length > 1) {
+        optionsList.children[optionIndex].remove();
+      } else {
+        ui.showError('至少需要一个选项');
+      }
+    }
+
+    function removeQuestion(index) {
+      const questionDiv = document.getElementById(`question-${index}`);
+      const container = document.getElementById('questions-container');
+
+      if (container.children.length > 1) {
+        questionDiv.remove();
+        updateQuestionNumbers();
+      } else {
+        ui.showError('至少需要一道题目');
+      }
+    }
+
+    function moveQuestion(index, direction) {
+      const container = document.getElementById('questions-container');
+      const questions = Array.from(container.children);
+      const currentIndex = questions.findIndex(q => q.dataset.index == index);
+
+      const newIndex = currentIndex + direction;
+      if (newIndex < 0 || newIndex >= questions.length) return;
+
+      if (direction > 0) {
+        questions[currentIndex].after(questions[newIndex]);
+      } else {
+        questions[currentIndex].before(questions[newIndex]);
+      }
+
+      updateQuestionNumbers();
+    }
+
+    function updateQuestionNumbers() {
+      const container = document.getElementById('questions-container');
+      const questions = container.querySelectorAll('.question-number');
+      questions.forEach((q, i) => {
+        q.textContent = i + 1;
+      });
+
+      const noQuestionsHint = document.getElementById('no-questions-hint');
+      noQuestionsHint.style.display = container.children.length === 0 ? 'block' : 'none';
+    }
+
+    function collectFormData() {
+      const title = document.getElementById('poll-title').value.trim();
+      const description = document.getElementById('poll-description').value.trim();
+      const isAnonymous = document.getElementById('poll-anonymous').checked;
+
+      const container = document.getElementById('questions-container');
+      const questions = Array.from(container.children).map((qDiv, sortOrder) => {
+        const type = qDiv.querySelector('.question-type').value;
+        const text = qDiv.querySelector('.question-text').value.trim();
+        const isRequired = qDiv.querySelector('.question-required').checked;
+
+        let options = null;
+        if (type === 'single_choice' || type === 'multiple_choice') {
+          const optionInputs = qDiv.querySelectorAll('.option-input');
+          options = Array.from(optionInputs)
+            .map(input => input.value.trim())
+            .filter(v => v);
+        }
+
+        return { text, type, isRequired, sortOrder, options };
+      });
+
+      return { title, description, isAnonymous, questions };
+    }
+
+    async function submitPoll(publish = false) {
+      const data = collectFormData();
+
+      if (!data.title) {
+        ui.showError('请输入投票标题');
+        return;
+      }
+
+      if (data.questions.length === 0) {
+        ui.showError('请至少添加一道题目');
+        return;
+      }
+
+      for (const q of data.questions) {
+        if (!q.text) {
+          ui.showError('请填写所有题目的内容');
+          return;
+        }
+        if ((q.type === 'single_choice' || q.type === 'multiple_choice') && (!q.options || q.options.length === 0)) {
+          ui.showError('选择题至少需要一个选项');
+          return;
+        }
+      }
+
+      try {
+        let poll;
+        if (editingPollId) {
+          poll = await api.put(`/polls/${editingPollId}`, data);
+        } else {
+          poll = await api.post('/polls', data);
+        }
+
+        if (publish) {
+          poll = await api.post(`/polls/${poll.id}/activate`);
+          ui.showSuccess('投票已发布！');
+        } else {
+          ui.showSuccess('投票已保存为草稿');
+        }
+
+        window.location.href = '/dashboard.html';
+      } catch (error) {
+        ui.showError(error.message);
+      }
+    }
+
+    function saveAndPublish() {
+      submitPoll(true);
+    }
+
+    async function loadPollForEdit(pollId) {
+      try {
+        const poll = await api.get(`/polls/${pollId}`);
+        editingPollId = pollId;
+
+        document.getElementById('page-title').textContent = '编辑投票';
+        document.getElementById('poll-title').value = poll.title || '';
+        document.getElementById('poll-description').value = poll.description || '';
+        document.getElementById('poll-anonymous').checked = poll.isAnonymous || false;
+
+        document.getElementById('questions-container').innerHTML = '';
+        questionCounter = 0;
+
+        const sortedQuestions = (poll.questions || []).sort((a, b) => a.sortOrder - b.sortOrder);
+        for (const q of sortedQuestions) {
+          addQuestion({
+            text: q.text,
+            type: q.type,
+            isRequired: q.isRequired,
+            options: q.optionsArray,
+          });
+        }
+      } catch (error) {
+        ui.showError('加载投票失败');
+        window.location.href = '/dashboard.html';
+      }
+    }
+
+    function escapeHtml(text) {
+      if (!text) return '';
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    document.getElementById('poll-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      submitPoll(false);
+    });
+
+    document.addEventListener('DOMContentLoaded', () => {
+      auth.requireAuth();
+      ui.updateNav();
+
+      const pollId = getPollIdFromPath();
+      if (pollId) {
+        loadPollForEdit(pollId);
+      } else {
+        addQuestion();
+      }
+    });
+  </script>
+</body>
+</html>

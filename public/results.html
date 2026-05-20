@@ -1,0 +1,561 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>投票结果 - PollWave</title>
+  <link rel="stylesheet" href="/css/style.css">
+  <script src="/libs/chart.js/chart.umd.js"></script>
+  <script src="/libs/socket.io/socket.io.min.js"></script>
+</head>
+<body>
+  <header class="header container">
+    <a href="/" class="logo">Poll<span>Wave</span></a>
+    <nav class="nav">
+      <a href="/dashboard.html">我的投票</a>
+      <span id="user-name"></span>
+      <a href="#" onclick="auth.logout()">退出</a>
+    </nav>
+  </header>
+
+  <main class="container">
+    <div id="loading" class="card" style="text-align: center; padding: 60px;">
+      <div style="font-size: 48px; margin-bottom: 16px;">⏳</div>
+      <p>加载中...</p>
+    </div>
+
+    <div id="error" class="card" style="display: none; text-align: center; padding: 60px;">
+      <div style="font-size: 48px; margin-bottom: 16px;">😕</div>
+      <h2 style="margin-bottom: 8px;">无法访问</h2>
+      <p style="color: var(--text-secondary);" id="error-message">您没有权限查看此投票的结果</p>
+      <a href="/dashboard.html" class="btn btn-primary">返回我的投票</a>
+    </div>
+
+    <div id="results-content" style="display: none;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; flex-wrap: wrap; gap: 16px;">
+        <div>
+          <h1 id="poll-title"></h1>
+          <p id="poll-status"></p>
+        </div>
+        <div style="display: flex; gap: 12px; flex-wrap: wrap;">
+          <button class="btn btn-secondary btn-sm" onclick="exportCSV()">📥 导出 CSV</button>
+          <button class="btn btn-secondary btn-sm" onclick="showShareModal()">🔗 分享链接</button>
+          <a href="/dashboard.html" class="btn btn-secondary btn-sm">返回列表</a>
+        </div>
+      </div>
+
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-value" id="stat-responses">0</div>
+          <div class="stat-label">总响应数</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value" id="stat-viewers">0</div>
+          <div class="stat-label">在线查看者</div>
+        </div>
+        <div class="stat-card" id="status-card">
+          <div class="stat-value" id="stat-status">-</div>
+          <div class="stat-label">投票状态</div>
+        </div>
+        <div class="stat-card" id="connection-card">
+          <div class="stat-value" id="stat-connection" style="font-size: 28px;">🔌</div>
+          <div class="stat-label" id="connection-label">连接中</div>
+        </div>
+      </div>
+
+      <div id="charts-container">
+      </div>
+
+      <div class="card" id="no-results" style="display: none; text-align: center; padding: 40px;">
+        <div style="font-size: 48px; margin-bottom: 16px;">📭</div>
+        <h3 style="margin-bottom: 8px;">暂无响应</h3>
+        <p style="color: var(--text-secondary);">等待用户参与投票后，这里将显示结果统计</p>
+      </div>
+    </div>
+  </main>
+
+  <div class="modal-backdrop" id="share-modal">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 class="card-title">分享投票</h3>
+        <button class="modal-close" onclick="closeShareModal()">&times;</button>
+      </div>
+      <p style="color: var(--text-secondary); margin-bottom: 16px;">复制以下链接分享给参与者：</p>
+      <div class="share-url" id="share-url-display"></div>
+      <div style="display: flex; gap: 12px; margin-top: 20px;">
+        <button class="btn btn-primary" onclick="copyShareUrl()" style="flex: 1;">复制链接</button>
+        <button class="btn btn-secondary" onclick="closeShareModal()" style="flex: 1;">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/js/app.js"></script>
+  <script>
+    let pollId = null;
+    let pollData = null;
+    let resultsData = null;
+    let socket = null;
+    let charts = {};
+    let shareCode = null;
+
+    const chartColors = [
+      '#8b5cf6',
+      '#22c55e',
+      '#3b82f6',
+      '#f59e0b',
+      '#ef4444',
+      '#06b6d4',
+      '#ec4899',
+      '#6366f1',
+    ];
+
+    function getPollIdFromPath() {
+      const path = window.location.pathname;
+      const match = path.match(/\/polls\/(\d+)/);
+      return match ? parseInt(match[1]) : null;
+    }
+
+    async function init() {
+      pollId = getPollIdFromPath();
+      if (!pollId) {
+        showError('无效的投票链接');
+        return;
+      }
+
+      try {
+        pollData = await api.get(`/polls/${pollId}`);
+        resultsData = await api.get(`/polls/${pollId}/results`);
+        shareCode = pollData.shareCode;
+
+        document.getElementById('loading').style.display = 'none';
+        document.getElementById('results-content').style.display = 'block';
+
+        renderResults();
+        connectSocket();
+      } catch (error) {
+        showError(error.message || '加载失败');
+      }
+    }
+
+    function showError(message) {
+      document.getElementById('loading').style.display = 'none';
+      document.getElementById('error').style.display = 'block';
+      document.getElementById('error-message').textContent = message;
+    }
+
+    function renderResults() {
+      document.getElementById('poll-title').textContent = pollData.title;
+      document.getElementById('poll-status').innerHTML = ui.getStatusBadge(pollData.status);
+      document.getElementById('stat-responses').textContent = resultsData.totalResponses;
+      document.getElementById('stat-status').textContent = pollData.status === 'active' ? '进行中' : pollData.status === 'closed' ? '已关闭' : '草稿';
+
+      const container = document.getElementById('charts-container');
+      const noResults = document.getElementById('no-results');
+
+      if (resultsData.totalResponses === 0) {
+        container.innerHTML = '';
+        noResults.style.display = 'block';
+        return;
+      }
+
+      noResults.style.display = 'none';
+
+      container.innerHTML = '';
+      const questions = pollData.questions.sort((a, b) => a.sortOrder - b.sortOrder);
+
+      questions.forEach((q, index) => {
+        const result = resultsData.results.find(r => r.questionId === q.id);
+        const chartDivId = `chart-${q.id}`;
+
+        const cardDiv = document.createElement('div');
+        cardDiv.className = 'card';
+        cardDiv.style.marginBottom = '24px';
+
+        cardDiv.innerHTML = `
+          <h3 style="margin-bottom: 16px; font-size: 16px;">
+            <span style="color: var(--accent); margin-right: 8px;">Q${index + 1}.</span>
+            ${escapeHtml(q.text)}
+          </h3>
+          ${renderChartContent(q, result, chartDivId)}
+        `;
+
+        container.appendChild(cardDiv);
+
+        if (result && (q.type === 'single_choice' || q.type === 'multiple_choice' || q.type === 'rating')) {
+          setTimeout(() => initChart(q, result, chartDivId), 100);
+        }
+      });
+    }
+
+    function renderChartContent(question, result, chartDivId) {
+      switch (question.type) {
+        case 'single_choice':
+        case 'multiple_choice':
+          return `
+            <div class="chart-container">
+              <canvas id="${chartDivId}"></canvas>
+            </div>
+            ${renderOptionTable(result)}
+          `;
+
+        case 'rating':
+          return `
+            <div style="text-align: center; margin-bottom: 20px;">
+              <div style="font-size: 48px; font-weight: 700; color: var(--warning);">${result?.average || 0}</div>
+              <div style="color: var(--text-secondary);">平均分</div>
+            </div>
+            <div class="chart-container" style="height: 200px;">
+              <canvas id="${chartDivId}"></canvas>
+            </div>
+          `;
+
+        case 'text_input':
+          return `
+            <div class="text-responses">
+              ${result?.responses?.length > 0
+                ? result.responses.map(r => `<div class="text-response">${escapeHtml(r)}</div>`).join('')
+                : '<p style="color: var(--text-muted); text-align: center; padding: 20px;">暂无文本回答</p>'
+              }
+            </div>
+          `;
+
+        default:
+          return '';
+      }
+    }
+
+    function renderOptionTable(result) {
+      if (!result?.options) return '';
+
+      return `
+        <div style="margin-top: 16px;">
+          ${result.options.map(opt => `
+            <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--border-color);">
+              <span>${escapeHtml(opt.text)}</span>
+              <span style="color: var(--text-secondary);">${opt.count} 票 (${opt.percentage}%)</span>
+            </div>
+          `).join('')}
+        </div>
+      `;
+    }
+
+    function initChart(question, result, divId) {
+      const canvas = document.getElementById(divId);
+      if (!canvas) return;
+
+      const ctx = canvas.getContext('2d');
+      let config;
+
+      if (question.type === 'single_choice') {
+        const labels = result.options.map(o => o.text);
+        const data = result.options.map(o => o.count);
+
+        config = {
+          type: 'pie',
+          data: {
+            labels,
+            datasets: [{
+              data,
+              backgroundColor: chartColors.slice(0, labels.length),
+              borderColor: '#1a1735',
+              borderWidth: 3,
+            }]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: {
+                position: 'right',
+                labels: {
+                  color: '#f5f5f7',
+                  padding: 16,
+                }
+              },
+              tooltip: {
+                backgroundColor: '#1a1735',
+                titleColor: '#f5f5f7',
+                bodyColor: '#a5a3b8',
+                borderColor: '#2d2850',
+                borderWidth: 1,
+              }
+            }
+          }
+        };
+      } else if (question.type === 'multiple_choice') {
+        const labels = result.options.map(o => o.text);
+        const data = result.options.map(o => o.count);
+
+        config = {
+          type: 'bar',
+          data: {
+            labels,
+            datasets: [{
+              label: '票数',
+              data,
+              backgroundColor: '#8b5cf6',
+              borderRadius: 6,
+            }]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            indexAxis: 'y',
+            plugins: {
+              legend: { display: false },
+              tooltip: {
+                backgroundColor: '#1a1735',
+                titleColor: '#f5f5f7',
+                bodyColor: '#a5a3b8',
+                borderColor: '#2d2850',
+                borderWidth: 1,
+              }
+            },
+            scales: {
+              x: {
+                beginAtZero: true,
+                ticks: { color: '#a5a3b8' },
+                grid: { color: 'rgba(45, 40, 80, 0.5)' }
+              },
+              y: {
+                ticks: { color: '#f5f5f7' },
+                grid: { display: false }
+              }
+            }
+          }
+        };
+      } else if (question.type === 'rating') {
+        const labels = ['1星', '2星', '3星', '4星', '5星'];
+        const data = result.distribution.map(d => d.count);
+
+        config = {
+          type: 'bar',
+          data: {
+            labels,
+            datasets: [{
+              label: '人数',
+              data,
+              backgroundColor: '#f59e0b',
+              borderRadius: 6,
+            }]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: { display: false },
+              tooltip: {
+                backgroundColor: '#1a1735',
+                titleColor: '#f5f5f7',
+                bodyColor: '#a5a3b8',
+                borderColor: '#2d2850',
+                borderWidth: 1,
+              }
+            },
+            scales: {
+              x: {
+                ticks: { color: '#a5a3b8' },
+                grid: { display: false }
+              },
+              y: {
+                beginAtZero: true,
+                ticks: { color: '#a5a3b8', stepSize: 1 },
+                grid: { color: 'rgba(45, 40, 80, 0.5)' }
+              }
+            }
+          }
+        };
+      }
+
+      if (config) {
+        if (charts[divId]) {
+          charts[divId].destroy();
+        }
+        charts[divId] = new Chart(ctx, config);
+      }
+    }
+
+    function updateConnectionStatus(status) {
+      const statusText = {
+        'connecting': '连接中',
+        'connected': '已连接',
+        'disconnected': '已断开',
+        'reconnecting': '重连中',
+      };
+      const statusColor = {
+        'connecting': '#f59e0b',
+        'connected': '#22c55e',
+        'disconnected': '#ef4444',
+        'reconnecting': '#f59e0b',
+      };
+      const statusIcons = {
+        'connecting': '🔌',
+        'connected': '🟢',
+        'disconnected': '🔴',
+        'reconnecting': '⏳',
+      };
+
+      const icon = statusIcons[status] || '❓';
+      const color = statusColor[status] || 'inherit';
+      const text = statusText[status] || status;
+
+      document.getElementById('stat-connection').textContent = icon;
+      document.getElementById('connection-label').textContent = text;
+      document.getElementById('stat-connection').style.color = color;
+    }
+
+    function connectSocket() {
+      const token = storage.getToken();
+      let reconnectAttempts = 0;
+      const maxReconnectAttempts = 10;
+      const reconnectDelay = 1000;
+
+      function doConnect() {
+        updateConnectionStatus('connecting');
+        
+        socket = io({
+          auth: { token },
+          reconnection: false,
+          timeout: 10000,
+        });
+
+        socket.on('connect', () => {
+          reconnectAttempts = 0;
+          updateConnectionStatus('connected');
+          console.log('Socket connected');
+          socket.emit('join_poll', { pollId });
+        });
+
+        socket.on('disconnect', (reason) => {
+          updateConnectionStatus('disconnected');
+          console.log('Socket disconnected:', reason);
+          
+          if (reconnectAttempts < maxReconnectAttempts) {
+            setTimeout(() => {
+              reconnectAttempts++;
+              updateConnectionStatus('reconnecting');
+              console.log(`Reconnecting... attempt ${reconnectAttempts}/${maxReconnectAttempts}`);
+              doConnect();
+            }, reconnectDelay * Math.min(reconnectAttempts, 5));
+          } else {
+            ui.showError('连接已断开，请刷新页面重试');
+          }
+        });
+
+        socket.on('connect_error', (error) => {
+          console.log('Connection error:', error);
+          updateConnectionStatus('disconnected');
+          
+          if (reconnectAttempts < maxReconnectAttempts) {
+            setTimeout(() => {
+              reconnectAttempts++;
+              updateConnectionStatus('reconnecting');
+              doConnect();
+            }, reconnectDelay * Math.min(reconnectAttempts, 5));
+          }
+        });
+
+        socket.on('viewer_count', (data) => {
+          if (data.pollId === pollId) {
+            document.getElementById('stat-viewers').textContent = data.count;
+          }
+        });
+
+        socket.on('new_response', async () => {
+          try {
+            resultsData = await api.get(`/polls/${pollId}/results`);
+            renderResults();
+            ui.showSuccess('有新的响应！');
+          } catch (e) {
+            console.error('刷新结果失败', e);
+          }
+        });
+
+        socket.on('poll_status_changed', (data) => {
+          if (data.pollId === pollId) {
+            pollData.status = data.status;
+            document.getElementById('poll-status').innerHTML = ui.getStatusBadge(data.status);
+            document.getElementById('stat-status').textContent = data.status === 'active' ? '进行中' : '已关闭';
+            ui.showSuccess(`投票状态已变更为：${data.status === 'active' ? '进行中' : '已关闭'}`);
+          }
+        });
+      }
+
+      doConnect();
+    }
+
+    async function exportCSV() {
+      try {
+        const response = await fetch(`${API_BASE}/polls/${pollId}/export`, {
+          headers: {
+            'Authorization': `Bearer ${storage.getToken()}`
+          }
+        });
+
+        if (!response.ok) {
+          throw new Error('导出失败');
+        }
+
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${pollData.title || 'poll_results'}.csv`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
+
+        ui.showSuccess('CSV 导出成功！');
+      } catch (error) {
+        ui.showError(error.message);
+      }
+    }
+
+    function showShareModal() {
+      if (!shareCode) return;
+      const url = `${window.location.origin}/share/${shareCode}`;
+      document.getElementById('share-url-display').textContent = url;
+      document.getElementById('share-modal').classList.add('active');
+    }
+
+    function closeShareModal() {
+      document.getElementById('share-modal').classList.remove('active');
+    }
+
+    function copyShareUrl() {
+      const url = document.getElementById('share-url-display').textContent;
+      navigator.clipboard.writeText(url).then(() => {
+        ui.showSuccess('链接已复制到剪贴板！');
+      }).catch(() => {
+        ui.showError('复制失败，请手动复制');
+      });
+    }
+
+    document.getElementById('share-modal').addEventListener('click', (e) => {
+      if (e.target.id === 'share-modal') {
+        closeShareModal();
+      }
+    });
+
+    function escapeHtml(text) {
+      if (!text) return '';
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+      auth.requireAuth();
+      ui.updateNav();
+      init();
+    });
+
+    window.addEventListener('beforeunload', () => {
+      if (socket && pollId) {
+        socket.emit('leave_poll', { pollId });
+      }
+    });
+  </script>
+</body>
+</html>

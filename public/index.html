@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PollWave - 实时投票与问卷平台</title>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <header class="header container">
+    <a href="/" class="logo">Poll<span>Wave</span></a>
+    <nav class="nav" id="login-nav">
+      <a href="#" onclick="showLogin()">登录</a>
+      <a href="#" onclick="showRegister()">注册</a>
+    </nav>
+    <nav class="nav" id="nav-links" style="display: none;">
+      <a href="/dashboard.html">我的投票</a>
+      <a href="/create-poll.html">创建投票</a>
+    </nav>
+    <nav class="nav" id="user-nav" style="display: none;">
+      <span id="user-name"></span>
+      <a href="#" onclick="auth.logout()">退出</a>
+    </nav>
+  </header>
+
+  <main class="container-sm">
+    <div class="card" id="welcome-card" style="display: none; text-align: center; padding: 60px;">
+      <div style="font-size: 64px; margin-bottom: 24px;">📊</div>
+      <h1 style="margin-bottom: 16px;">欢迎使用 PollWave</h1>
+      <p style="color: var(--text-secondary); margin-bottom: 32px;">实时投票与问卷平台，让决策更简单</p>
+      <div style="display: flex; gap: 16px; justify-content: center;">
+        <a href="/dashboard.html" class="btn btn-primary">查看我的投票</a>
+        <a href="/create-poll.html" class="btn btn-secondary">创建新投票</a>
+      </div>
+    </div>
+
+    <div id="auth-forms">
+      <div class="card" id="login-form">
+        <div class="card-header">
+          <h2 class="card-title">登录</h2>
+        </div>
+        <form id="login-form-element">
+          <div class="form-group">
+            <label class="form-label">用户名或邮箱</label>
+            <input type="text" class="form-input" id="login-username" placeholder="输入用户名或邮箱" required>
+          </div>
+          <div class="form-group">
+            <label class="form-label">密码</label>
+            <input type="password" class="form-input" id="login-password" placeholder="输入密码" required>
+          </div>
+          <button type="submit" class="btn btn-primary" style="width: 100%; margin-bottom: 16px;">登录</button>
+          <p style="text-align: center; color: var(--text-secondary); font-size: 14px;">
+            还没有账号？<a href="#" class="link" onclick="showRegister()">立即注册</a>
+          </p>
+        </form>
+      </div>
+
+      <div class="card" id="register-form" style="display: none;">
+        <div class="card-header">
+          <h2 class="card-title">注册</h2>
+        </div>
+        <form id="register-form-element">
+          <div class="form-group">
+            <label class="form-label">用户名 <span class="required">*</span></label>
+            <input type="text" class="form-input" id="register-username" placeholder="输入用户名" required>
+          </div>
+          <div class="form-group">
+            <label class="form-label">邮箱 <span class="required">*</span></label>
+            <input type="email" class="form-input" id="register-email" placeholder="输入邮箱" required>
+          </div>
+          <div class="form-group">
+            <label class="form-label">密码 <span class="required">*</span></label>
+            <input type="password" class="form-input" id="register-password" placeholder="输入密码" required>
+          </div>
+          <div class="form-group">
+            <label class="form-label">确认密码 <span class="required">*</span></label>
+            <input type="password" class="form-input" id="register-confirm" placeholder="再次输入密码" required>
+          </div>
+          <button type="submit" class="btn btn-primary" style="width: 100%; margin-bottom: 16px;">注册</button>
+          <p style="text-align: center; color: var(--text-secondary); font-size: 14px;">
+            已有账号？<a href="#" class="link" onclick="showLogin()">立即登录</a>
+          </p>
+        </form>
+      </div>
+    </div>
+  </main>
+
+  <script src="/js/app.js"></script>
+  <script>
+    function showLogin() {
+      document.getElementById('login-form').style.display = 'block';
+      document.getElementById('register-form').style.display = 'none';
+      document.getElementById('auth-forms').style.display = 'block';
+      document.getElementById('welcome-card').style.display = 'none';
+    }
+
+    function showRegister() {
+      document.getElementById('login-form').style.display = 'none';
+      document.getElementById('register-form').style.display = 'block';
+      document.getElementById('auth-forms').style.display = 'block';
+      document.getElementById('welcome-card').style.display = 'none';
+    }
+
+    document.getElementById('login-form-element').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const username = document.getElementById('login-username').value;
+      const password = document.getElementById('login-password').value;
+
+      try {
+        await auth.login(username, password);
+        ui.showSuccess('登录成功！');
+        window.location.href = '/dashboard.html';
+      } catch (error) {
+        ui.showError(error.message);
+      }
+    });
+
+    document.getElementById('register-form-element').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const username = document.getElementById('register-username').value;
+      const email = document.getElementById('register-email').value;
+      const password = document.getElementById('register-password').value;
+      const confirm = document.getElementById('register-confirm').value;
+
+      if (password !== confirm) {
+        ui.showError('两次输入的密码不一致');
+        return;
+      }
+
+      try {
+        await auth.register(username, email, password);
+        ui.showSuccess('注册成功！');
+        window.location.href = '/dashboard.html';
+      } catch (error) {
+        ui.showError(error.message);
+      }
+    });
+
+    document.addEventListener('DOMContentLoaded', () => {
+      ui.updateNav();
+      if (auth.isAuthenticated()) {
+        document.getElementById('auth-forms').style.display = 'none';
+        document.getElementById('welcome-card').style.display = 'block';
+      }
+    });
+  </script>
+</body>
+</html>

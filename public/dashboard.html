@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>我的投票 - PollWave</title>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <header class="header container">
+    <a href="/" class="logo">Poll<span>Wave</span></a>
+    <nav class="nav">
+      <a href="/dashboard.html" class="link">我的投票</a>
+      <a href="/create-poll.html">创建投票</a>
+      <span id="user-name"></span>
+      <a href="#" onclick="auth.logout()">退出</a>
+    </nav>
+  </header>
+
+  <main class="container">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px;">
+      <h1>我的投票</h1>
+      <a href="/create-poll.html" class="btn btn-primary">+ 创建新投票</a>
+    </div>
+
+    <div id="polls-container">
+    </div>
+
+    <div class="empty-state" id="empty-state" style="display: none;">
+      <div class="empty-state-icon">📋</div>
+      <h3 style="margin-bottom: 8px;">还没有投票</h3>
+      <p style="color: var(--text-secondary); margin-bottom: 24px;">创建您的第一个投票，开始收集反馈</p>
+      <a href="/create-poll.html" class="btn btn-primary">创建投票</a>
+    </div>
+  </main>
+
+  <div class="modal-backdrop" id="share-modal">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 class="card-title">分享投票</h3>
+        <button class="modal-close" onclick="closeShareModal()">&times;</button>
+      </div>
+      <p style="color: var(--text-secondary); margin-bottom: 16px;">复制以下链接分享给参与者：</p>
+      <div class="share-url" id="share-url-display"></div>
+      <div style="display: flex; gap: 12px; margin-top: 20px;">
+        <button class="btn btn-primary" onclick="copyShareUrl()" style="flex: 1;">复制链接</button>
+        <button class="btn btn-secondary" onclick="closeShareModal()" style="flex: 1;">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/js/app.js"></script>
+  <script>
+    let currentShareUrl = '';
+
+    async function loadPolls() {
+      try {
+        const polls = await api.get('/polls');
+        const container = document.getElementById('polls-container');
+        const emptyState = document.getElementById('empty-state');
+
+        if (polls.length === 0) {
+          container.innerHTML = '';
+          emptyState.style.display = 'block';
+          return;
+        }
+
+        emptyState.style.display = 'none';
+
+        container.innerHTML = polls.map(poll => `
+          <div class="poll-card">
+            <div class="poll-card-header">
+              <div>
+                <h3 class="poll-card-title">${escapeHtml(poll.title)}</h3>
+                ${poll.description ? `<p style="color: var(--text-secondary); font-size: 14px; margin-top: 4px;">${escapeHtml(poll.description)}</p>` : ''}
+              </div>
+              ${ui.getStatusBadge(poll.status)}
+            </div>
+            <div class="poll-card-meta">
+              <span>📊 ${poll.responseCount || 0} 条响应</span>
+              <span>📅 ${ui.formatDate(poll.createdAt)}</span>
+              ${poll.isAnonymous ? '<span>🔒 匿名投票</span>' : ''}
+            </div>
+            <div class="poll-card-actions">
+              ${poll.status === 'draft' ? `
+                <a href="/polls/${poll.id}/edit" class="btn btn-secondary btn-sm">编辑</a>
+                <button class="btn btn-primary btn-sm" onclick="activatePoll(${poll.id})">发布</button>
+              ` : ''}
+              ${poll.status === 'active' ? `
+                <button class="btn btn-secondary btn-sm" onclick="showShareModal('${poll.shareCode}')">分享链接</button>
+                <a href="/polls/${poll.id}/results" class="btn btn-primary btn-sm">查看结果</a>
+                <button class="btn btn-danger btn-sm" onclick="closePoll(${poll.id})">关闭投票</button>
+              ` : ''}
+              ${poll.status === 'closed' ? `
+                <button class="btn btn-secondary btn-sm" onclick="showShareModal('${poll.shareCode}')">分享链接</button>
+                <a href="/polls/${poll.id}/results" class="btn btn-primary btn-sm">查看结果</a>
+              ` : ''}
+              ${poll.status === 'draft' ? `
+                <button class="btn btn-danger btn-sm" onclick="deletePoll(${poll.id})">删除</button>
+              ` : ''}
+            </div>
+          </div>
+        `).join('');
+      } catch (error) {
+        ui.showError('加载投票列表失败');
+      }
+    }
+
+    function escapeHtml(text) {
+      if (!text) return '';
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    async function activatePoll(id) {
+      try {
+        await api.post(`/polls/${id}/activate`);
+        ui.showSuccess('投票已发布！');
+        loadPolls();
+      } catch (error) {
+        ui.showError(error.message);
+      }
+    }
+
+    async function closePoll(id) {
+      if (!confirm('确定要关闭此投票吗？关闭后将无法再接受新的响应。')) {
+        return;
+      }
+      try {
+        await api.post(`/polls/${id}/close`);
+        ui.showSuccess('投票已关闭');
+        loadPolls();
+      } catch (error) {
+        ui.showError(error.message);
+      }
+    }
+
+    async function deletePoll(id) {
+      if (!confirm('确定要删除此投票吗？此操作不可撤销。')) {
+        return;
+      }
+      try {
+        await api.delete(`/polls/${id}`);
+        ui.showSuccess('投票已删除');
+        loadPolls();
+      } catch (error) {
+        ui.showError(error.message);
+      }
+    }
+
+    function showShareModal(shareCode) {
+      currentShareUrl = `${window.location.origin}/share/${shareCode}`;
+      document.getElementById('share-url-display').textContent = currentShareUrl;
+      document.getElementById('share-modal').classList.add('active');
+    }
+
+    function closeShareModal() {
+      document.getElementById('share-modal').classList.remove('active');
+    }
+
+    function copyShareUrl() {
+      navigator.clipboard.writeText(currentShareUrl).then(() => {
+        ui.showSuccess('链接已复制到剪贴板！');
+      }).catch(() => {
+        ui.showError('复制失败，请手动复制');
+      });
+    }
+
+    document.getElementById('share-modal').addEventListener('click', (e) => {
+      if (e.target.id === 'share-modal') {
+        closeShareModal();
+      }
+    });
+
+    document.addEventListener('DOMContentLoaded', () => {
+      auth.requireAuth();
+      ui.updateNav();
+      loadPolls();
+    });
+  </script>
+</body>
+</html>
